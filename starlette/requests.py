@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import typing
 from http import cookies as http_cookies
@@ -295,12 +296,12 @@ class Request(HTTPConnection):
 
     async def is_disconnected(self) -> bool:
         if not self._is_disconnected:
-            message: Message = {}
-
-            # If message isn't immediately available, move on
-            with anyio.CancelScope() as cs:
-                cs.cancel()
-                message = await self._receive()
+            try:
+                message = await asyncio.wait_for(
+                    self._receive(), timeout=0.0000001
+                )
+            except asyncio.TimeoutError:
+                message = {}
 
             if message.get("type") == "http.disconnect":
                 self._is_disconnected = True
