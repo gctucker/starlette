@@ -102,43 +102,16 @@ class BaseHTTPMiddleware:
 
         request = _CachedRequest(scope, receive)
         wrapped_receive = request.wrapped_receive
-        response_sent = anyio.Event()
 
         async def call_next(request: Request) -> Response:
             app_exc: Exception | None = None
-
-            async def receive_or_disconnect() -> Message:
-                if response_sent.is_set():
-                    return {"type": "http.disconnect"}
-
-                async with anyio.create_task_group() as task_group:
-
-                    async def wrap(func: typing.Callable[[], typing.Awaitable[T]]) -> T:
-                        result = await func()
-                        task_group.cancel_scope.cancel()
-                        return result
-
-                    task_group.start_soon(wrap, response_sent.wait)
-                    message = await wrap(wrapped_receive)
-
-                if response_sent.is_set():
-                    return {"type": "http.disconnect"}
-
-                return message
-
-            async def send_no_error(message: Message) -> None:
-                try:
-                    await send_stream.send(message)
-                except anyio.BrokenResourceError:
-                    # recv_stream has been closed, i.e. response_sent has been set.
-                    return
 
             async def coro() -> None:
                 nonlocal app_exc
 
                 with send_stream:
                     try:
-                        await self.app(scope, receive_or_disconnect, send_no_error)
+                        await self.app(scope, request.receive, send_stream.send)
                     except Exception as exc:
                         app_exc = exc
 
@@ -178,8 +151,8 @@ class BaseHTTPMiddleware:
             async with anyio.create_task_group() as task_group:
                 response = await self.dispatch_func(request, call_next)
                 await response(scope, wrapped_receive, send)
-                response_sent.set()
                 recv_stream.close()
+                task_group.cancel_scope.cancel()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         raise NotImplementedError()  # pragma: no cover
